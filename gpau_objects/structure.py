@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ annotations
 import os
 from datetime import datetime
 from inspect import getframeinfo, stack
@@ -31,6 +31,7 @@ class Dummy:
     list_nor_achs: bool = False
     list_inc_achs: bool = False
     list_sec_achs: bool = False
+    list_lbs: bool = False  # Leaderboards listing
 
     # searching
     search_games: Optional[str] = None
@@ -40,11 +41,14 @@ class Dummy:
     search_nor_achs: Optional[str] = None
     search_inc_achs: Optional[str] = None
     search_sec_achs: Optional[str] = None
+    search_lbs: Optional[str] = None
 
-    # unlocking
+    # unlocking & submitting
     unlock_id: Optional[str] = None
     unlock_all: bool = False
     unlock_listed: bool = False
+    submit_lb_id: Optional[str] = None
+    submit_score_val: Optional[int] = None
 
 class Wrapper:
     _id: Optional[int] = None
@@ -105,6 +109,8 @@ class Wrapper:
         nm = self.__class__.__name__
         return f"<{nm} '{ps() if ps else self.id}'>"
 
+# --- ACHIEVEMENTS ---
+
 class AchievementDefinition(Wrapper):
     def __init__(self, *args) -> None:
         super().__init__(*args)
@@ -147,7 +153,7 @@ class AchievementInstance(Wrapper):
         super().__init__(*args)
 
         self._changers = {
-            "last_updated_timestamp": lambda x: datetime.fromtimestamp(x / 1000)
+            "last_updated_timestamp": lambda x: datetime.fromtimestamp(x / 1000) if x else None
         }
 
         self._id = self.get_arg(0, args)
@@ -185,12 +191,60 @@ class AchievementPendingOp(Wrapper):
     def print_string(self):
         return self.join(self.client_context_id, self.external_achievement_id, self.external_game_id, self.external_player_id)
 
+# --- LEADERBOARDS ---
+
+class LeaderboardDefinition(Wrapper):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+
+        self._id = self.get_arg(0, args)
+        self.game_id = self.get_arg(1, args)
+        self.external_leaderboard_id = self.get_arg(2, args)
+        self.name = self.get_arg(3, args)
+        self.icon_image_id = self.get_arg(4, args)
+        self.order_type = self.get_arg(5, args)  # 0: Larger is better, 1: Smaller is better
+        self.limits_formatted = self.get_arg(6, args)
+
+    def print_string(self):
+        return self.join(self.external_leaderboard_id, self.name, f"Order: {self.order_type}")
+
+class LeaderboardInstance(Wrapper):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+
+        self._id = self.get_arg(0, args)
+        self.leaderboard_id = self.get_arg(1, args)
+        self.player_id = self.get_arg(2, args)
+        self.raw_score = self.get_arg(3, args)
+        self.formatted_score = self.get_arg(4, args)
+        self.score_tag = self.get_arg(5, args)
+
+    def print_string(self):
+        return self.join(self.leaderboard_id, self.raw_score, self.formatted_score)
+
+class LeaderboardPendingOp(Wrapper):
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+
+        self._id = self.get_arg(0, args)
+        self.client_context_id = self.get_arg(1, args)
+        self.external_leaderboard_id = self.get_arg(2, args)
+        self.score = self.get_arg(3, args)
+        self.score_tag = self.get_arg(4, args)
+        self.external_game_id = self.get_arg(5, args)
+        self.external_player_id = self.get_arg(6, args)
+
+    def print_string(self):
+        return self.join(self.client_context_id, self.external_leaderboard_id, self.score, self.external_game_id)
+
+# --- CLIENT & GAME CONTEXTS ---
+
 class ClientContext(Wrapper):
     def __init__(self, *args) -> None:
         super().__init__(*args)
 
         self._changers = {
-            "account_name": lambda x: x[0:2] + "*" * (len(x) - x.find("@") - 2) + x[x.find("@")-2:]
+            "account_name": lambda x: x[0:2] + "*" * (len(x) - x.find("@") - 2) + x[x.find("@")-2:] if (x and "@" in str(x)) else x
         }
 
         self._id = self.get_arg(0, args)
@@ -219,7 +273,6 @@ class GameInstance(Wrapper):
         self.preferred = self.get_arg(9, args)
         self.gamepad_support = self.get_arg(10, args)
 
-
 class GamePlayerId(Wrapper):
     def __init__(self, *args) -> None:
         super().__init__(*args)
@@ -230,7 +283,6 @@ class GamePlayerId(Wrapper):
         self.game_player_ids_external_game_player_id = self.get_arg(3, args)
         self.game_player_ids_external_primary_player_id = self.get_arg(4, args)
         self.game_player_ids_created_in_epoch = self.get_arg(5, args)
-
 
 class Game(Wrapper):
     def __init__(self, *args) -> None:
@@ -335,6 +387,7 @@ class Player(Wrapper):
     def print_string(self):
         return self.join(self.external_player_id, self.profile_name, f"Level {self.current_level}")
 
+# --- FINDER CLASS ---
 
 from gpau_objects.dbfile import DbFile
 
@@ -350,6 +403,15 @@ class Finder:
 
     def ach_inst_by_id(self, x: Any) -> Optional[AchievementInstance]:
         return self.db.select_by_cls_fe(AchievementInstance, ["_id"], [x])
+
+    def lb_def_by_id(self, x: Any) -> Optional[LeaderboardDefinition]:
+        return self.db.select_by_cls_fe(LeaderboardDefinition, ["_id"], [x])
+
+    def lb_def_by_external_id(self, x: Any) -> Optional[LeaderboardDefinition]:
+        return self.db.select_by_cls_fe(LeaderboardDefinition, ["external_leaderboard_id"], [x])
+
+    def lb_inst_by_id(self, x: Any) -> Optional[LeaderboardInstance]:
+        return self.db.select_by_cls_fe(LeaderboardInstance, ["_id"], [x])
 
     def client_context_by_id(self, x: Any) -> Optional[ClientContext]:
         return self.db.select_by_cls_fe(ClientContext, ["_id"], [x])
@@ -371,6 +433,15 @@ class Finder:
 
     def ach_defs_by_ach_insts(self, x: List[AchievementInstance]) -> List[Optional[AchievementDefinition]]:
         return [self.ach_def_by_ach_inst(y) for y in x]
+
+    def lb_defs_by_game_id(self, x: Any) -> List[Optional[LeaderboardDefinition]]:
+        return self.db.select_by_cls(LeaderboardDefinition, ["game_id"], [x], exact=True)
+
+    def lb_defs_by_game(self, x: Game) -> List[Optional[LeaderboardDefinition]]:
+        return self.lb_defs_by_game_id(x.id)
+
+    def lb_inst_by_lb_def(self, x: LeaderboardDefinition) -> Optional[LeaderboardInstance]:
+        return self.db.select_by_cls_fe(LeaderboardInstance, ["leaderboard_id"], [x.id])
 
     def game_inst_by_game(self, x: Game) -> Optional[GameInstance]:
         return self.db.select_by_cls_fe(GameInstance, ["instance_game_id", "installed"], [x.id, 1])
