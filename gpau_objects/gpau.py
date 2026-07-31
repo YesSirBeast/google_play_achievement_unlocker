@@ -13,9 +13,9 @@ class GooglePlayAchievementUnlocker:
     readme_text = """
 HOW TO USE?
 1) Disconnect from the internet
-2) Unlock the achievements you want
+2) Unlock the achievements or submit leaderboard scores you want
 3) Reconnect to the internet
-4) Run Google Play Games to sync the achievements
+4) Run Google Play Games to sync the changes
 5) Profit
 
 ACHIEVEMENT FLAGS?
@@ -26,7 +26,7 @@ SEC - secret
 GAME WON'T APPEAR IN --list-cc? Try one of these:
 1) Play the game for a couple of minutes
 2) In-app button to logout and login again
-3) Earn any achievement
+3) Earn any achievement / submit a score
 4) Re/Open Google Play App
 5) Clear Cache/All data and login again
 6) Restart phone\n"""
@@ -88,12 +88,19 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
             Logger.error_exit(self.readme_text)
 
         try:
+            # Pending Ops Temizleme
             if self.args.rem_all_ops:
                 Logger.info("Removing all pending achievement ops...")
                 self.db.empty_pending_ops()
+            
+            if getattr(self.args, "rem_all_lb_ops", False):
+                Logger.info("Removing all pending leaderboard ops...")
+                self.db.empty_lb_pending_ops()
 
             achs: List[AchievementDefinition] = []
+            lbs: List[LeaderboardDefinition] = []
 
+            # Listeleme Seçenekleri
             if self.args.list_cc:
                 ccs = self.db.select(cls=ClientContext)
                 print("\n".join([x.print_string() for x in ccs]))
@@ -106,12 +113,15 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
             elif self.args.list_ops:
                 ops: List[AchievementPendingOp] = [x for x in self.db.select(cls=AchievementPendingOp) if x]
                 print("\n".join([x.print_string() for x in ops]))
+            elif getattr(self.args, "list_lb_ops", False):
+                lb_ops: List[LeaderboardPendingOp] = [x for x in self.db.select(cls=LeaderboardPendingOp) if x]
+                print("\n".join([x.print_string() for x in lb_ops]))
 
+            # Başarım Listeleme
             if self.args.list_achs:
                 app = self.get_app()
                 assert app is not None, "Package not found"
-                ach_defs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x]
-                achs = ach_defs
+                achs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x]
             elif self.args.list_u_achs:
                 app = self.get_app()
                 assert app is not None, "Package not found"
@@ -125,21 +135,25 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
             elif self.args.list_nor_achs:
                 app = self.get_app()
                 assert app is not None, "Package not found"
-                ach_defs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x and x.is_normal()]
-                achs = ach_defs
+                achs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x and x.is_normal()]
             elif self.args.list_inc_achs:
                 app = self.get_app()
                 assert app is not None, "Package not found"
-                ach_defs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x and x.is_incremental()]
-                achs = ach_defs
+                achs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x and x.is_incremental()]
             elif self.args.list_sec_achs:
                 app = self.get_app()
                 assert app is not None, "Package not found"
-                ach_defs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x and x.is_secret()]
-                achs = ach_defs
+                achs = [x for x in self.finder.ach_defs_by_game_id(app.id) if x and x.is_secret()]
+            
+            # Liderlik Tablosu Listeleme
+            elif getattr(self.args, "list_lbs", False):
+                app = self.get_app()
+                assert app is not None, "Package not found"
+                lbs = [x for x in self.finder.lb_defs_by_game_id(app.id) if x]
 
             opt_app = self.get_app(optional=True)
 
+            # Arama İşlemleri
             if self.args.search_games:
                 search = self.args.search_games[0]
                 found_games: List[Game] = self.db.search(search, cls=Game)
@@ -156,10 +170,16 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
                 achs = self.find_achievements(self.args.search_inc_achs[0], opt_app, nor=False, sec=False)
             elif self.args.search_sec_achs:
                 achs = self.find_achievements(self.args.search_sec_achs[0], opt_app, nor=False, inc=False)
+            elif getattr(self.args, "search_lbs", None):
+                lbs = self.find_leaderboards(self.args.search_lbs[0], opt_app)
 
+            # Çıktı Yazdırma
             if len(achs):
                 print("\n".join([x.print_string() for x in achs]))
+            if len(lbs):
+                print("\n".join([x.print_string() for x in lbs]))
 
+            # Başarım Kilidi Açma İşlemleri
             if self.args.unlock_id:
                 self.unlock_achievement(self.finder.ach_def_by_external_id(self.args.unlock_id[0]))
             elif self.args.unlock_all:
@@ -172,9 +192,20 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
                 for ach in achs:
                     self.unlock_achievement(ach)
 
+            # Liderlik Tablosu Skor Gönderme İşlemleri
+            if getattr(self.args, "submit_score", None):
+                lb_id, raw_score = self.args.submit_score[0], self.args.submit_score[1]
+                self.submit_leaderboard_score(self.finder.lb_def_by_external_id(lb_id), raw_score)
+
+            # Çift Kayıtları Temizleme
             if self.args.rem_dup_ops:
                 Logger.info("Removing duplicate pending achievement ops...")
                 removed = self.db.remove_duplicate_pending_ops()
+                Logger.info(f"Removed: {removed}")
+
+            if getattr(self.args, "rem_dup_lb_ops", False):
+                Logger.info("Removing duplicate pending leaderboard ops...")
+                removed = self.db.remove_duplicate_lb_pending_ops()
                 Logger.info(f"Removed: {removed}")
 
         except Exception:
@@ -226,6 +257,38 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
             "external_player_id": self.get_player_id(),
         })
 
+    def submit_leaderboard_score(self, lb_def: Optional[LeaderboardDefinition], score: str):
+        if lb_def is None:
+            Logger.error("Leaderboard definition not found")
+            return
+
+        lb_inst = self.finder.lb_inst_by_lb_def(lb_def)
+        if lb_inst is None:
+            Logger.error("Leaderboard definition doesn't have an associated instance")
+            return
+
+        game = self.finder.game_by_lb_inst(lb_inst)
+        assert game is not None, "Game not found"
+        game_inst = None if not game else self.finder.game_inst_by_game(game)
+        client_context = None if not game_inst else self.finder.client_context_by_game_inst(game_inst)
+
+        if not client_context:
+            Logger.error("No client context found for this game")
+            return
+
+        package_name = "NO_INSTANCE" if not game_inst else game_inst.package_name
+        Logger.info(f"Submitting score {score} to leaderboard {lb_def.external_leaderboard_id} ({package_name})...")
+
+        self.db.add_lb_pending_op({
+            "_id": self.db.get_next_lb_pending_op_id(),
+            "client_context_id": client_context.id,
+            "external_leaderboard_id": lb_def.external_leaderboard_id,
+            "raw_score": int(score),
+            "score_tag": "",
+            "external_game_id": game.external_game_id,
+            "external_player_id": self.get_player_id(),
+        })
+
     def get_increment_value(self):
         print(end='\r')
         value = input("### Steps to increment by: ")
@@ -254,6 +317,10 @@ GAME WON'T APPEAR IN --list-cc? Try one of these:
         ]
 
         return ach_defs_filtered
+
+    def find_leaderboards(self, search, package=None) -> List[LeaderboardDefinition]:
+        lbs = self.finder.lb_defs_by_game(package) if package else self.db.select(cls=LeaderboardDefinition)
+        return self.db.search_instances_by(search, ["name"], lbs)
 
     def get_player_id(self):
         players: List[Player] = self.db.select(cls=Player)
