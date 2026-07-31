@@ -1,4 +1,8 @@
-from gpau_objects.structure import AchievementPendingOp, Wrapper, AchievementDefinition, AchievementInstance, ClientContext, GameInstance, GamePlayerId, Game, Image, Player
+from gpau_objects.structure import (
+    AchievementPendingOp, Wrapper, AchievementDefinition, AchievementInstance, 
+    ClientContext, GameInstance, GamePlayerId, Game, Image, Player,
+    LeaderboardDefinition, LeaderboardInstance, LeaderboardPendingOp
+)
 from gpau_objects.common import Logger
 from sqlite3 import Connection
 from typing import Dict, List, Any
@@ -8,6 +12,9 @@ class DbFile:
         "achievement_pending_ops": AchievementPendingOp,
         "achievement_definitions": AchievementDefinition,
         "achievement_instances": AchievementInstance,
+        "leaderboard_pending_ops": LeaderboardPendingOp,
+        "leaderboard_definitions": LeaderboardDefinition,
+        "leaderboard_instances": LeaderboardInstance,
         "client_contexts": ClientContext,
         "game_instances": GameInstance,
         "game_player_ids": GamePlayerId,
@@ -118,6 +125,8 @@ class DbFile:
     def ex(self, table: str):
         return self.cur.execute("select * from " + table + " order by _id")
 
+    # --- PENDING OPERATIONS (ACHIEVEMENTS) ---
+
     def remove_duplicate_pending_ops(self, by_col: str="external_achievement_id"):
         ops = [AchievementPendingOp(*x) for x in self.ex("achievement_pending_ops").fetchall()]
         seen = set()
@@ -143,4 +152,33 @@ class DbFile:
 
     def get_next_pending_op_id(self):
         res = self.cur.execute("select max(_id) from achievement_pending_ops").fetchone()[0]
+        return 0 if res is None else res + 1
+
+    # --- PENDING OPERATIONS (LEADERBOARDS) ---
+
+    def remove_duplicate_lb_pending_ops(self, by_col: str="external_leaderboard_id"):
+        ops = [LeaderboardPendingOp(*x) for x in self.ex("leaderboard_pending_ops").fetchall()]
+        seen = set()
+        removed = 0
+        for op in ops:
+            if getattr(op, by_col) in seen:
+                self.cur.execute("delete from leaderboard_pending_ops where _id = ?", (op.id,))
+                removed += 1
+            else:
+                seen.add(getattr(op, by_col))
+        self.connection.commit()
+        return removed
+
+    def empty_lb_pending_ops(self):
+        self.cur.execute("delete from leaderboard_pending_ops")
+        self.connection.commit()
+
+    def add_lb_pending_op(self, op: Dict[str, Any]):
+        sql = "insert into leaderboard_pending_ops values ({})".format(
+            ",".join("?" for _ in range(len(op))))
+        self.cur.execute(sql, list(op.values()))
+        self.connection.commit()
+
+    def get_next_lb_pending_op_id(self):
+        res = self.cur.execute("select max(_id) from leaderboard_pending_ops").fetchone()[0]
         return 0 if res is None else res + 1
